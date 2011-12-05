@@ -1,30 +1,37 @@
 
-var util = require("util");
-var events = require("events");
-var http = require("http");
+var util = require('util');
+var events = require('events');
+var http = require('http');
 
-var ws = require("websocket-server"),
-    WebSocketRequest = require("websocket").request,
-    Mixin = require("websocket-server/lib/lang/mixin"),
-    miksagoConnection = require("websocket-server/lib/ws/connection");
+var ws = require('websocket-server'),
+    WebSocketRequest = require('websocket').request,
+    Mixin = require('websocket-server/lib/lang/mixin'),
+    miksagoConnection = require('websocket-server/lib/ws/connection');
 
 exports.createServer = function(options) {
   return new Server(options);
 }
 
-function ProxyConnection(conn) {
+function ProxyConnection(conn, server) {
   events.EventEmitter.call(this);
+  var self = this;
 
   this._conn = conn;
-  
-  var self = this;
+  this._server = server;
+  this.storage = new Object();
+
   this._conn.on('message', function(msg) {
-    if (typeof msg.type !== "undefined") {
-      if (msg.type !== "utf8")
+    if (typeof msg.type !== 'undefined') {
+      if (msg.type !== 'utf8')
         return;
       msg = msg.utf8Data;
     }
     self.emit('message', msg);
+  });
+
+  this._conn.on('close', function() {
+    self.emit('close');
+    self._server.emit('close', self);
   });
 }
 
@@ -39,6 +46,7 @@ ProxyConnection.prototype.send = function(msg) {
 
 function Server(options) {
   events.EventEmitter.call(this);
+  var self = this;
   options = options || new Object();
 
   this.httpServer = new http.Server();
@@ -58,15 +66,13 @@ function Server(options) {
     closeTimeout: 5000
   }, options.config);
 
-  var self = this;
-
-  this.miksagoServer.on("connection", function(conn) {
+  this.miksagoServer.on('connection', function(conn) {
     conn.remoteAddress = conn._socket.remoteAddress;
     self._handleConnection(conn);
   });
 
-  this.httpServer.on("upgrade", function(req, socket, head) {
-    if(typeof req.headers["sec-websocket-version"] !== "undefined") {
+  this.httpServer.on('upgrade', function(req, socket, head) {
+    if(typeof req.headers['sec-websocket-version'] !== 'undefined') {
       var wsRequest = new WebSocketRequest(socket, req, self.config);
       try {
         wsRequest.readHandshake();
@@ -74,14 +80,14 @@ function Server(options) {
         self._handleConnection(wsConnection);
       } catch(e) {
         self._err(new Error(
-            "websocket request unsupported by WebSocket-Node: " + e.toString()));
+            'websocket request unsupported by WebSocket-Node: ' + e.toString()));
         return;
       }
     } else {
-      if(req.method == "GET" &&
+      if(req.method == 'GET' &&
          (req.headers.upgrade && req.headers.connection) &&
-         req.headers.upgrade.toLowerCase() === "websocket" &&
-         req.headers.connection.toLowerCase() === "upgrade") {
+         req.headers.upgrade.toLowerCase() === 'websocket' &&
+         req.headers.connection.toLowerCase() === 'upgrade') {
         new miksagoConnection(self.miksagoServer.manager, self.miksagoServer.options, req, socket, head);
       }
     }
@@ -91,7 +97,7 @@ function Server(options) {
 util.inherits(Server, events.EventEmitter);
 
 Server.prototype._handleConnection = function(conn) {
-  this.emit('connection', new ProxyConnection(conn));
+  this.emit('connection', new ProxyConnection(conn, this));
 }
 
 Server.prototype.listen = function(port, hostname, callback) {
