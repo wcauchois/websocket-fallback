@@ -11,4 +11,7 @@ serv.on('connection', function(conn) {
   });
 });
 
-serv.listen(10080, "localhost");
+serv.listen(10080, "localhost", function() {
+  console.log("listening on port 10080...");
+});
+
