@@ -3,54 +3,57 @@ var util = require('util');
 var events = require('events');
 var http = require('http');
 
-var ws = require('websocket-server'),
-    WebSocketRequest = require('websocket').request,
-    Mixin = require('websocket-server/lib/lang/mixin'),
-    miksagoConnection = require('websocket-server/lib/ws/connection');
+var WebSocketServer   = require('websocket-server');
+var WebSocketRequest  = require('websocket').request;
+var Mixin             = require('websocket-server/lib/lang/mixin');
+var miksagoConnection = require('websocket-server/lib/ws/connection');
 
 exports.createServer = function(options) {
   return new Server(options);
 }
 
 function ProxyConnection(conn, server) {
+
   events.EventEmitter.call(this);
-  var self = this;
 
   this._conn = conn;
   this._server = server;
-  this.storage = new Object();
+  this.storage = {};
+  this.remoteAddress = this._conn.remoteAddress;
+  this.specs = this._conn.specs;
 
-  this._conn.on('message', function(msg) {
+  this._conn.on('message', (function(msg) {
     if (typeof msg.type !== 'undefined') {
-      if (msg.type !== 'utf8')
+      if (msg.type !== 'utf8') {
         return;
+      }
       msg = msg.utf8Data;
     }
-    self.emit('message', msg);
-  });
+    this.emit('message', msg);
+  }).bind(this));
 
-  this._conn.on('close', function() {
-    self.emit('close');
-    self._server.emit('close', self);
-  });
+  this._conn.on('close', (function() {
+    this.emit('close');
+    this._server.emit('close', this);
+  }).bind(this));
 }
 
 util.inherits(ProxyConnection, events.EventEmitter);
 
 ProxyConnection.prototype.send = function(msg) {
-  if (typeof this._conn.sendUTF == 'function')
+  if (typeof this._conn.sendUTF == 'function') {
     this._conn.sendUTF(msg);
-  else
+  } else {
     this._conn.send(msg);
-}
+  }
+};
 
 function Server(options) {
   events.EventEmitter.call(this);
-  var self = this;
-  options = options || new Object();
+  options = options || {};
 
-  this.httpServer = new http.Server();
-  this.miksagoServer = ws.createServer();
+  this.httpServer = options.httpServer || new http.Server();
+  this.miksagoServer = WebSocketServer.createServer();
   this.miksagoServer.server = this.httpServer;
 
   this._err = options.err || function(e) { };
@@ -66,32 +69,36 @@ function Server(options) {
     closeTimeout: 5000
   }, options.config);
 
-  this.miksagoServer.on('connection', function(conn) {
+  this.miksagoServer.on('connection', (function(conn) {
     conn.remoteAddress = conn._socket.remoteAddress;
-    self._handleConnection(conn);
-  });
+    conn.specs = 'legacy';
+    this._handleConnection(conn);
+  }).bind(this));
 
-  this.httpServer.on('upgrade', function(req, socket, head) {
-    if(typeof req.headers['sec-websocket-version'] !== 'undefined') {
-      var wsRequest = new WebSocketRequest(socket, req, self.config);
+  this.httpServer.on('upgrade', (function(req, socket, head) {
+
+    if (typeof req.headers['sec-websocket-version'] !== 'undefined') {
+      var wsRequest = new WebSocketRequest(socket, req, this.config);
       try {
         wsRequest.readHandshake();
         var wsConnection = wsRequest.accept(wsRequest.requestedProtocols[0], wsRequest.origin);
-        self._handleConnection(wsConnection);
+        wsConnection.specs = 'current';
+        this._handleConnection(wsConnection);
       } catch(e) {
-        self._err(new Error(
-            'websocket request unsupported by WebSocket-Node: ' + e.toString()));
+        this._err(new Error('websocket request unsupported by WebSocket-Node: ' + e.toString()));
         return;
       }
     } else {
-      if(req.method == 'GET' &&
+      this.specs = 'legacy';
+      if (req.method == 'GET' &&
          (req.headers.upgrade && req.headers.connection) &&
          req.headers.upgrade.toLowerCase() === 'websocket' &&
          req.headers.connection.toLowerCase() === 'upgrade') {
-        new miksagoConnection(self.miksagoServer.manager, self.miksagoServer.options, req, socket, head);
+        new miksagoConnection(this.miksagoServer.manager, this.miksagoServer.options, req, socket, head);
       }
     }
-  });
+
+  }).bind(this));
 }
 
 util.inherits(Server, events.EventEmitter);
